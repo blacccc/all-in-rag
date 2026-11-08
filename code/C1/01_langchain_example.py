@@ -20,30 +20,43 @@ docs = loader.load()
 # 文本分块
 text_splitter = RecursiveCharacterTextSplitter()
 chunks = text_splitter.split_documents(docs)
+print("读取的文档数量：", len(docs))
+print("切分后的文本块数量：", len(chunks))
+print("第一个文本块的前200字：", chunks[0].page_content[:200] if chunks else "没有文本块")
 
-# 中文嵌入模型
+# 加载中文嵌入模型
+print("正在加载嵌入模型……")
+
 embeddings = HuggingFaceEmbeddings(
     model_name="BAAI/bge-small-zh-v1.5",
-    model_kwargs={'device': 'cpu'},
-    encode_kwargs={'normalize_embeddings': True}
+    model_kwargs={"device": "cpu"},
+    encode_kwargs={"normalize_embeddings": True}
 )
-  
-# 构建向量存储
+
+print("嵌入模型加载完成，正在构建向量索引……")
+
+# 创建内存向量库
 vectorstore = InMemoryVectorStore(embeddings)
-vectorstore.add_documents(chunks)
+
+# 将上一节切分好的文本块转换为向量并存入
+document_ids = vectorstore.add_documents(chunks)
+
+print(f"索引构建完成，已存入 {len(document_ids)} 个文本块")
 
 # 提示词模板
-prompt = ChatPromptTemplate.from_template("""请根据下面提供的上下文信息来回答问题。
-请确保你的回答完全基于这些上下文。
-如果上下文中没有足够的信息来回答问题，请直接告知：“抱歉，我无法根据提供的上下文找到相关信息来回答此问题。”
+prompt = ChatPromptTemplate.from_template(
+    """你是一名文档问答助手。
+请依据下面的资料回答问题。
+如果资料不足以回答，请明确说明无法从资料中确定答案。
 
-上下文:
+资料：
 {context}
 
-问题: {question}
+问题：
+{question}
 
-回答:"""
-                                          )
+回答："""
+)
 
 # 配置大语言模型
 
@@ -51,8 +64,8 @@ prompt = ChatPromptTemplate.from_template("""请根据下面提供的上下文�
 llm = ChatOpenAI(
     model="glm-4.7-flash-free",
     temperature=0.7,
-    max_tokens=4096,
-    api_key=os.getenv("DEEPSEEK_API_KEY"),
+    max_tokens=2048,
+    api_key=os.getenv("AIHUBMIX_API_KEY"),
     base_url="https://aihubmix.com/v1"
 )
 
@@ -66,10 +79,34 @@ llm = ChatOpenAI(
 
 # 用户查询
 question = "文中举了哪些例子？"
+print("\n当前问题：", question)
 
-# 在向量存储中查询相关文档
+# 从向量库中检索最多3个相似文本块
 retrieved_docs = vectorstore.similarity_search(question, k=3)
-docs_content = "\n\n".join(doc.page_content for doc in retrieved_docs)
+print("检索到的文本块数量：", len(retrieved_docs))
 
-answer = llm.invoke(prompt.format(question=question, context=docs_content))
-print(answer)
+# 查看每个检索结果的前200个字符
+for i, doc in enumerate(retrieved_docs, start=1):
+    print(f"\n--- 第{i}个检索结果：前200个字符 ---")
+    print(doc.page_content[:200])
+
+# 把检索结果合并为上下文
+docs_content = "\n\n".join(
+    doc.page_content for doc in retrieved_docs
+)
+
+print("\n合并后的上下文长度：", len(docs_content), "个字符")
+
+# 把问题和检索资料填入提示词
+formatted_prompt = prompt.format(
+    question=question,
+    context=docs_content
+)
+
+# 调用大模型生成回答
+print("\n正在调用大模型生成回答……")
+answer = llm.invoke(formatted_prompt)
+
+# 输出回答正文
+print("\n模型回答：")
+print(answer.content)
